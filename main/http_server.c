@@ -436,6 +436,38 @@ static esp_err_t homekit_url_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// 处理恢复出厂设置请求
+static esp_err_t factory_reset_post_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "收到恢复出厂设置请求");
+    
+    // 擦除NVS分区
+    esp_err_t ret = nvs_flash_erase();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "擦除NVS失败: %s", esp_err_to_name(ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to reset");
+        return ESP_FAIL;
+    }
+    
+    // 重新初始化NVS
+    ret = nvs_flash_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "重新初始化NVS失败: %s", esp_err_to_name(ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to reinit NVS");
+        return ESP_FAIL;
+    }
+
+    // 返回成功响应
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    
+    // 延迟2秒后重启设备
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
+    
+    return ESP_OK;
+}
+
 // URI处理结构
 static const httpd_uri_t root = {
     .uri       = "/",
@@ -486,6 +518,13 @@ static const httpd_uri_t homekit_url = {
     .user_ctx  = NULL
 };
 
+static const httpd_uri_t factory_reset = {
+    .uri       = "/factory-reset",
+    .method    = HTTP_POST,
+    .handler   = factory_reset_post_handler,
+    .user_ctx  = NULL
+};
+
 // 启动Web服务器
 esp_err_t start_webserver(void)
 {
@@ -520,6 +559,7 @@ esp_err_t start_webserver(void)
         httpd_register_uri_handler(server, &saved_wifi);
         httpd_register_uri_handler(server, &delete_wifi);
         httpd_register_uri_handler(server, &homekit_url);
+        httpd_register_uri_handler(server, &factory_reset);  // 添加恢复出厂设置处理程序
         return ESP_OK;
     }
     

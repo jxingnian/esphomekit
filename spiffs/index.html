@@ -258,21 +258,66 @@
             gap: 10px;
         }
         
-        .homekit-section {
-            margin-top: 20px;
+        .homekit-section, .factory-reset-section {
+            margin-top: 30px;
+            text-align: center;
+            margin-bottom: 20px;
             padding: 15px;
             background-color: #f8f9fa;
             border-radius: 8px;
-            border: 1px solid #ddd;
+            border: 1px solid #dee2e6;
+            opacity: 0.85;
+        }
+        
+        .homekit-section h2, .factory-reset-section h2 {
+            color: #6c757d;
+            margin-bottom: 10px;
+            font-size: 1rem;
         }
         
         .homekit-url {
             word-break: break-all;
-            margin-top: 10px;
-            font-family: monospace;
             padding: 10px;
-            background-color: white;
+            background-color: #fff;
             border-radius: 4px;
+            border: 1px solid #ced4da;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 13px;
+            color: #495057;
+        }
+        
+        .factory-reset-btn {
+            background-color: #6c757d;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s;
+            width: auto;
+            margin: 0 auto;
+            display: block;
+            opacity: 0.8;
+        }
+        
+        .factory-reset-btn:hover {
+            background-color: #dc3545;
+            opacity: 1;
+        }
+        
+        .factory-reset-btn:disabled {
+            background-color: #adb5bd;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        
+        .wifi-scan-section {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
             border: 1px solid #ddd;
         }
     </style>
@@ -292,19 +337,16 @@
             <div id="saved-wifi-list">正在加载...</div>
         </div>
         
-        <div class="homekit-section">
-            <h2>HomeKit配置</h2>
-            <div id="homekit-url" class="homekit-url">
-                正在获取HomeKit配置链接...
+        <div class="wifi-scan-section">
+            <h2>WiFi扫描</h2>
+            <button class="refresh-btn" onclick="scanWiFi()">
+                <span class="refresh-icon">🔄</span> 扫描WiFi
+            </button>
+            <div class="wifi-list" id="wifi-list">
+                <!-- WiFi列表将通过JavaScript动态添加 -->
             </div>
         </div>
         
-        <button class="refresh-btn" onclick="scanWiFi()">
-            <span class="refresh-icon">🔄</span> 扫描WiFi
-        </button>
-        <div class="wifi-list" id="wifi-list">
-            <!-- WiFi列表将通过JavaScript动态添加 -->
-        </div>
         <form id="wifi-form">
             <div class="form-group">
                 <label for="ssid">WiFi名称 (SSID):</label>
@@ -317,6 +359,19 @@
             <button type="submit" id="submit-btn">连接</button>
         </form>
         <div id="status"></div>
+        
+        <div class="homekit-section">
+            <h2>HomeKit配置</h2>
+            <div id="homekit-url" class="homekit-url">
+                正在获取HomeKit配置链接...
+            </div>
+        </div>
+        
+        <div class="factory-reset-section">
+            <h2>系统设置</h2>
+            <p style="color: #666; margin-bottom: 15px;">警告：恢复出厂设置将清除所有配置数据，设备将重启。</p>
+            <button class="factory-reset-btn" onclick="factoryReset()">恢复出厂设置</button>
+        </div>
     </div>
 
     <script>
@@ -335,22 +390,47 @@
             return '📶';
         }
 
-        async function scanWiFi() {
+        // 添加防抖动函数
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        // 扫描WiFi的函数
+        async function scanWiFiImpl() {
+            const wifiList = document.getElementById('wifi-list');
+            const scanButton = document.querySelector('.refresh-btn');
+            
             try {
-                const wifiList = document.getElementById('wifi-list');
+                // 禁用扫描按钮
+                scanButton.disabled = true;
                 wifiList.innerHTML = '<div style="text-align: center;">扫描中...</div>';
+                
+                // 添加延迟，避免频繁请求
+                await new Promise(resolve => setTimeout(resolve, 500));
                 
                 const response = await fetch('/scan');
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 const data = await response.json();
-                console.log('Received data:', data);  // 添加调试日志
                 
                 if (data.status === 'error') {
                     showStatus(data.message || '扫描失败', 'error');
                     return;
                 }
+                
+                // 清除之前的错误状态信息
+                const statusDiv = document.getElementById('status');
+                statusDiv.className = '';
+                statusDiv.textContent = '';
                 
                 wifiList.innerHTML = '';
                 if (!data.networks || data.networks.length === 0) {
@@ -378,8 +458,14 @@
                 console.error('扫描错误:', error);
                 showStatus(`扫描WiFi失败: ${error.message}`, 'error');
                 wifiList.innerHTML = '<div style="text-align: center; color: red;">扫描失败</div>';
+            } finally {
+                // 恢复扫描按钮
+                scanButton.disabled = false;
             }
         }
+
+        // 使用防抖动包装scanWiFi函数
+        const scanWiFi = debounce(scanWiFiImpl, 1000);
 
         document.getElementById('wifi-form').addEventListener('submit', async function(e) {
             e.preventDefault();
@@ -539,6 +625,33 @@
             }
         }
 
+        // 添加请求锁，防止并发请求
+        let isRequesting = false;
+        
+        // 通用的请求函数
+        async function makeRequest(url, options = {}) {
+            if (isRequesting) {
+                console.log('已有请求正在进行中...');
+                return null;
+            }
+            
+            try {
+                isRequesting = true;
+                const response = await fetch(url, options);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return await response.json();
+            } catch (error) {
+                console.error(`请求失败 (${url}):`, error);
+                throw error;
+            } finally {
+                isRequesting = false;
+                // 添加延迟，让服务器有时间处理完前一个请求
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+
         // 获取HomeKit URL
         async function getHomekitUrl() {
             const maxRetries = 3;
@@ -546,17 +659,32 @@
             
             async function tryFetch() {
                 try {
-                    const response = await fetch('/homekit-url');
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    const data = await response.json();
+                    const data = await makeRequest('/homekit-url');
                     if (data && data.url) {
                         const urlElement = document.getElementById('homekit-url');
-                        urlElement.innerHTML = `
-                            <div>HomeKit配置链接：</div>
-                            <a href="${data.url}" target="_blank">${data.url}</a>
-                        `;
+                        // 创建链接元素
+                        const link = document.createElement('a');
+                        link.href = data.url;
+                        link.textContent = data.url;
+                        link.target = '_blank';
+                        link.style.color = '#007bff';
+                        link.style.textDecoration = 'none';
+                        link.style.wordBreak = 'break-all';
+                        link.style.display = 'inline-block';
+                        link.style.marginTop = '5px';
+                        
+                        // 添加鼠标悬停效果
+                        link.onmouseover = () => {
+                            link.style.color = '#0056b3';
+                            link.style.textDecoration = 'underline';
+                        };
+                        link.onmouseout = () => {
+                            link.style.color = '#007bff';
+                            link.style.textDecoration = 'none';
+                        };
+                        
+                        urlElement.innerHTML = '<div>HomeKit配置链接：</div>';
+                        urlElement.appendChild(link);
                         return true;
                     }
                     throw new Error('Invalid response data');
@@ -565,7 +693,8 @@
                     if (retryCount < maxRetries) {
                         retryCount++;
                         console.log(`重试获取HomeKit URL (${retryCount}/${maxRetries})...`);
-                        await new Promise(resolve => setTimeout(resolve, 1000)); // 等待1秒后重试
+                        // 增加重试间隔时间
+                        await new Promise(resolve => setTimeout(resolve, 2000));
                         return tryFetch();
                     }
                     document.getElementById('homekit-url').innerHTML = `
@@ -582,13 +711,53 @@
             return tryFetch();
         }
 
+        // 恢复出厂设置
+        async function factoryReset() {
+            if (!confirm('确定要恢复出厂设置吗？这将清除所有配置数据，设备将重启！')) {
+                return;
+            }
+            
+            const button = document.querySelector('.factory-reset-btn');
+            button.disabled = true;
+            button.textContent = '正在重置...';
+            
+            try {
+                const response = await fetch('/factory-reset', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    showStatus('设备正在重启...', 'success');
+                    // 等待5秒后刷新页面
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 5000);
+                } else {
+                    throw new Error('重置失败');
+                }
+            } catch (error) {
+                console.error('恢复出厂设置失败:', error);
+                showStatus('恢复出厂设置失败: ' + error.message, 'error');
+                button.disabled = false;
+                button.textContent = '恢复出厂设置';
+            }
+        }
+
         // 页面加载完成后执行
-        document.addEventListener('DOMContentLoaded', function() {
-            getWiFiStatus();
-            getSavedWiFi();
-            getHomekitUrl(); 
-            // 减少轮询频率到15秒
-            setInterval(getWiFiStatus, 15000);
+        document.addEventListener('DOMContentLoaded', async function() {
+            // 按顺序执行请求，每个请求之间有延迟
+            try {
+                await getWiFiStatus();
+                await new Promise(resolve => setTimeout(resolve, 500));
+                await getSavedWiFi();
+                await new Promise(resolve => setTimeout(resolve, 500));
+                await getHomekitUrl();
+            } catch (error) {
+                console.error('初始化失败:', error);
+            }
         });
 
         // 页面加载完成后自动扫描WiFi
