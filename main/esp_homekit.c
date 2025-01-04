@@ -2,7 +2,7 @@
  * @Author: xingnina j_xingnian@163.com
  * @Date: 2025-01-04 13:19:29
  * @LastEditors: xingnina j_xingnian@163.com
- * @LastEditTime: 2025-01-04 13:26:06
+ * @LastEditTime: 2025-01-04 16:39:16
  * @FilePath: \esphomekit\main\esp_homekit.c
  * @Description: esp_homekit主文件
  */
@@ -213,6 +213,34 @@ static void smart_outlet_thread_entry(void *p)
             ESP_LOGI(TAG, "插座使用触发 [%d]", appliance_value.b);
         }
     }
+}
+
+#define QRCODE_BASE_URL     "https://espressif.github.io/esp-homekit-sdk/qrcode.html"
+
+esp_err_t esp_homekit_get_setup_url(char *url_buffer, size_t buffer_size)
+{
+    if (url_buffer == NULL || buffer_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char *setup_payload = NULL;
+#ifdef CONFIG_EXAMPLE_USE_HARDCODED_SETUP_CODE
+    setup_payload = esp_hap_get_setup_payload(CONFIG_EXAMPLE_SETUP_CODE, 
+                                            CONFIG_EXAMPLE_SETUP_ID, 
+                                            false, 
+                                            HAP_CID_OUTLET);
+#endif
+
+    if (setup_payload) {
+        int len = snprintf(url_buffer, buffer_size, "%s?data=%s", QRCODE_BASE_URL, setup_payload);
+        free(setup_payload);
+        
+        if (len < 0 || len >= buffer_size) {
+            return ESP_FAIL;
+        }
+        return ESP_OK;
+    }
+    return ESP_FAIL;
 }
 
 void app_homeassistant_start()
