@@ -106,12 +106,9 @@ static esp_err_t scan_get_handler(httpd_req_t *req)
         .bssid = NULL,
         .channel = 0,
         .show_hidden = true,
-        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_type = WIFI_SCAN_TYPE_PASSIVE,
         .scan_time = {
-            .active = {
-                .min = 100,
-                .max = 300
-            }
+            .passive = 500  // 被动扫描时间设置为500ms
         }
     };
     
