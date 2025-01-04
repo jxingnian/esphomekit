@@ -2,7 +2,7 @@
  * @Author: xingnina j_xingnian@163.com
  * @Date: 2025-01-04 13:19:29
  * @LastEditors: xingnina j_xingnian@163.com
- * @LastEditTime: 2025-01-04 16:39:16
+ * @LastEditTime: 2025-01-04 18:07:23
  * @FilePath: \esphomekit\main\esp_homekit.c
  * @Description: esp_homekit主文件
  */
@@ -226,9 +226,9 @@ esp_err_t esp_homekit_get_setup_url(char *url_buffer, size_t buffer_size)
     char *setup_payload = NULL;
 #ifdef CONFIG_EXAMPLE_USE_HARDCODED_SETUP_CODE
     setup_payload = esp_hap_get_setup_payload(CONFIG_EXAMPLE_SETUP_CODE, 
-                                            CONFIG_EXAMPLE_SETUP_ID, 
-                                            false, 
-                                            HAP_CID_OUTLET);
+                                                  CONFIG_EXAMPLE_SETUP_ID, 
+                                                  false, 
+                                                  HAP_CID_OUTLET);
 #endif
 
     if (setup_payload) {

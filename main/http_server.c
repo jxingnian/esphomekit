@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include "nvs_flash.h"
 #include "lwip/ip4_addr.h"
+#include "esp_homekit.h"
 
 static const char *TAG = "http_server";
 static httpd_handle_t server = NULL;
@@ -27,6 +28,8 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     char filepath[FILE_PATH_MAX];
     FILE *fd = NULL;
     struct stat file_stat;
+    char *chunk = NULL;
+    esp_err_t ret = ESP_OK;
     
     // 构建完整的文件路径
     strlcpy(filepath, "/spiffs/index.html", sizeof(filepath));
@@ -34,48 +37,53 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     // 获取文件信息
     if (stat(filepath, &file_stat) == -1) {
         ESP_LOGE(TAG, "Failed to stat file : %s", filepath);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read file");
-        return ESP_FAIL;
+        ret = httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read file");
+        goto exit;
     }
     
     fd = fopen(filepath, "r");
     if (!fd) {
         ESP_LOGE(TAG, "Failed to read file : %s", filepath);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read file");
-        return ESP_FAIL;
+        ret = httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read file");
+        goto exit;
     }
     
-    // 设置Content-Type
+    // 设置Content-Type和其他响应头
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    
+    // 分配内存
+    chunk = malloc(CHUNK_SIZE);
+    if (chunk == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate memory for chunk");
+        ret = httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to allocate memory");
+        goto exit;
+    }
     
     // 发送文件内容
-    char *chunk = malloc(CHUNK_SIZE);
-    if (chunk == NULL) {
-        fclose(fd);
-        ESP_LOGE(TAG, "Failed to allocate memory for chunk");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to allocate memory");
-        return ESP_FAIL;
-    }
-    
     size_t chunksize;
     do {
         chunksize = fread(chunk, 1, CHUNK_SIZE, fd);
         if (chunksize > 0) {
             if (httpd_resp_send_chunk(req, chunk, chunksize) != ESP_OK) {
-                free(chunk);
-                fclose(fd);
                 ESP_LOGE(TAG, "File sending failed!");
-                httpd_resp_sendstr_chunk(req, NULL);
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send file");
-                return ESP_FAIL;
+                ret = httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send file");
+                goto exit;
             }
         }
     } while (chunksize != 0);
     
-    free(chunk);
-    fclose(fd);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
+    // 发送结束标记
+    ret = httpd_resp_send_chunk(req, NULL, 0);
+
+exit:
+    if (fd) {
+        fclose(fd);
+    }
+    if (chunk) {
+        free(chunk);
+    }
+    return ret;
 }
 
 // 处理WiFi扫描请求
@@ -83,17 +91,17 @@ static esp_err_t scan_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "收到WiFi扫描请求: %s", req->uri);
     
-    // 检查WiFi状态
-    wifi_mode_t mode;
-    esp_wifi_get_mode(&mode);
-    if (mode & WIFI_MODE_STA) {
-        // 检查是否正在连接
-        wifi_ap_record_t ap_info;
-        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
-            esp_wifi_disconnect();
-            vTaskDelay(pdMS_TO_TICKS(500)); // 等待断开完成
-        }
-    }
+    // // 检查WiFi状态
+    // wifi_mode_t mode;
+    // esp_wifi_get_mode(&mode);
+    // if (mode & WIFI_MODE_STA) {
+    //     // 检查是否正在连接
+    //     wifi_ap_record_t ap_info;
+    //     if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+    //         esp_wifi_disconnect();
+    //         vTaskDelay(pdMS_TO_TICKS(500)); // 等待断开完成
+    //     }
+    // }
     
     ESP_LOGI(TAG, "清除之前的扫描结果");
     esp_wifi_scan_stop();  // 停止可能正在进行的扫描
@@ -245,46 +253,53 @@ static esp_err_t configure_post_handler(httpd_req_t *req)
 // 获取WiFi连接状态
 static esp_err_t wifi_status_get_handler(httpd_req_t *req)
 {
-    wifi_ap_record_t ap_info;
-    char *response = NULL;
-    cJSON *root = cJSON_CreateObject();
+    char *buffer = NULL;
+    size_t buffer_len = 0;
+    static char last_ip[16] = {0};  // 用于存储上次的IP地址
+    char current_ip[16] = {0};
     
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    wifi_ap_record_t ap_info;
     if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        esp_netif_ip_info_t ip_info;
+        esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &ip_info);
+        
+        snprintf(current_ip, sizeof(current_ip), IPSTR, IP2STR(&ip_info.ip));
+        
+        // 只有当IP地址发生变化时才输出日志
+        if (strcmp(current_ip, last_ip) != 0) {
+            ESP_LOGI(TAG, "当前IP地址: %s", current_ip);
+            strncpy(last_ip, current_ip, sizeof(last_ip));
+        }
+
         cJSON_AddStringToObject(root, "status", "connected");
         cJSON_AddStringToObject(root, "ssid", (char *)ap_info.ssid);
+        cJSON_AddStringToObject(root, "ip", current_ip);
         cJSON_AddNumberToObject(root, "rssi", ap_info.rssi);
         char bssid_str[18];
-        sprintf(bssid_str, "%02X:%02X:%02X:%02X:%02X:%02X",
+        snprintf(bssid_str, sizeof(bssid_str), "%02x:%02x:%02x:%02x:%02x:%02x",
                 ap_info.bssid[0], ap_info.bssid[1], ap_info.bssid[2],
                 ap_info.bssid[3], ap_info.bssid[4], ap_info.bssid[5]);
         cJSON_AddStringToObject(root, "bssid", bssid_str);
-        
-        // 获取并添加IP地址
-        wifi_mode_t mode;
-        esp_wifi_get_mode(&mode);
-        if (mode & WIFI_MODE_STA) {
-            esp_netif_ip_info_t ip_info;
-            esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-            if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
-                char ip_str[16];
-                snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip_info.ip));
-                cJSON_AddStringToObject(root, "ip", ip_str);
-                ESP_LOGI(TAG, "当前IP地址: %s", ip_str);
-            } else {
-                ESP_LOGE(TAG, "获取IP地址失败");
-            }
-        }
     } else {
         cJSON_AddStringToObject(root, "status", "disconnected");
     }
-    
-    response = cJSON_PrintUnformatted(root);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, response);
-    
-    free(response);
+
+    buffer = cJSON_PrintUnformatted(root);
+    buffer_len = strlen(buffer);
     cJSON_Delete(root);
-    return ESP_OK;
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    esp_err_t ret = httpd_resp_send(req, buffer, buffer_len);
+    free(buffer);
+    
+    return ret;
 }
 
 // 获取已保存的WiFi列表
@@ -378,6 +393,49 @@ static esp_err_t delete_wifi_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// 获取HomeKit设置URL
+static esp_err_t homekit_url_get_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "收到HomeKit URL请求: %s", req->uri);
+    
+    char url[128] = {0};
+    esp_err_t ret = esp_homekit_get_setup_url(url, sizeof(url));
+    
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "获取HomeKit setup URL失败，错误码: %d", ret);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to get HomeKit URL");
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "获取到HomeKit URL: %s", url);
+    
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        ESP_LOGE(TAG, "创建JSON对象失败");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create response");
+        return ESP_FAIL;
+    }
+    
+    cJSON_AddStringToObject(root, "url", url);
+    
+    char *json_str = cJSON_Print(root);
+    if (json_str == NULL) {
+        ESP_LOGE(TAG, "生成JSON字符串失败");
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create response");
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "返回JSON响应: %s", json_str);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_str);
+    
+    free(json_str);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
 // URI处理结构
 static const httpd_uri_t root = {
     .uri       = "/",
@@ -393,45 +451,38 @@ static const httpd_uri_t scan = {
     .user_ctx  = NULL
 };
 
-static const httpd_uri_t api_scan = {
-    .uri       = "/api/scan",
-    .method    = HTTP_GET,
-    .handler   = scan_get_handler,
-    .user_ctx  = NULL
-};
-
-static const httpd_uri_t configure_old = {
+static const httpd_uri_t configure = {
     .uri       = "/configure",
     .method    = HTTP_POST,
     .handler   = configure_post_handler,
     .user_ctx  = NULL
 };
 
-static const httpd_uri_t configure = {
-    .uri       = "/api/connect",
-    .method    = HTTP_POST,
-    .handler   = configure_post_handler,
-    .user_ctx  = NULL
-};
-
 static const httpd_uri_t wifi_status = {
-    .uri       = "/api/status",
+    .uri       = "/status",
     .method    = HTTP_GET,
     .handler   = wifi_status_get_handler,
     .user_ctx  = NULL
 };
 
 static const httpd_uri_t saved_wifi = {
-    .uri       = "/api/saved",
+    .uri       = "/saved",
     .method    = HTTP_GET,
     .handler   = saved_wifi_get_handler,
     .user_ctx  = NULL
 };
 
 static const httpd_uri_t delete_wifi = {
-    .uri       = "/api/delete",
+    .uri       = "/delete",
     .method    = HTTP_POST,
     .handler   = delete_wifi_post_handler,
+    .user_ctx  = NULL
+};
+
+static const httpd_uri_t homekit_url = {
+    .uri       = "/homekit-url",
+    .method    = HTTP_GET,
+    .handler   = homekit_url_get_handler,
     .user_ctx  = NULL
 };
 
@@ -448,21 +499,27 @@ esp_err_t start_webserver(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 9;
-    config.server_port = 8080;  // 修改服务器端口为8080
+    config.max_uri_handlers = 10;
+    config.server_port = 8080;
+    config.max_open_sockets = 7;  // 增加最大连接数
+    config.backlog_conn = 5;      // 设置等待连接队列大小
+    config.recv_wait_timeout = 3;  // 减少接收超时
+    config.send_wait_timeout = 3;  // 减少发送超时
+    config.keep_alive_enable = false;
+    config.core_id = 0;           // 固定在核心0上运行
+    config.stack_size = 8192;     // 增加堆栈大小
     
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
     
     if (httpd_start(&server, &config) == ESP_OK) {
         ESP_LOGI(TAG, "Registering URI handlers");
         httpd_register_uri_handler(server, &root);
-        httpd_register_uri_handler(server, &scan);        // 旧的扫描路径
-        httpd_register_uri_handler(server, &api_scan);    // 新的API扫描路径
-        httpd_register_uri_handler(server, &configure_old); // 旧的配置路径
-        httpd_register_uri_handler(server, &configure);     // 新的API配置路径
+        httpd_register_uri_handler(server, &scan);
+        httpd_register_uri_handler(server, &configure);
         httpd_register_uri_handler(server, &wifi_status);
         httpd_register_uri_handler(server, &saved_wifi);
         httpd_register_uri_handler(server, &delete_wifi);
+        httpd_register_uri_handler(server, &homekit_url);
         return ESP_OK;
     }
     
