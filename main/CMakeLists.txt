@@ -1,4 +1,4 @@
-idf_component_register(SRCS "esp_homekit.c" "main.c" "wifi_manager.c" "http_server.c" "mqtt_xn.c"
+idf_component_register(SRCS "esp_homekit.c" "main.c" "wifi_manager.c" "http_server.c" "mqtt_xn.c" "esp_homekit.c"
                     INCLUDE_DIRS "."
                     REQUIRES esp_wifi esp_http_server nvs_flash json spiffs mqtt driver 
                             esp_hap_core esp_hap_platform esp_hap_apple_profiles

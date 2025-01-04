@@ -7,6 +7,6 @@
 #ifndef _ESP_HOMEKIT_H_
 #define _ESP_HOMEKIT_H_
 
-
+void app_homeassistant_start();
 
 #endif

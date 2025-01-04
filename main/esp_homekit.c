@@ -111,19 +111,16 @@ static int outlet_write(hap_write_data_t write_data[], int count,
     }
     return ret;
 }
-
 /* Main application thread */
 static void smart_outlet_thread_entry(void *p)
 {
     hap_acc_t *accessory;
     hap_serv_t *service;
 
-    /* Initialize the HAP core */
+    /* 初始化 HAP 核心 */
     hap_init(HAP_TRANSPORT_WIFI);
 
-    /* Initialise the mandatory parameters for Accessory which will be added as
-     * the mandatory services internally
-     */
+    /* 初始化配件的必要参数，这些参数将作为必要服务内部添加 */
     hap_acc_cfg_t cfg = {
         .name = "Esp-Smart-Outlet",
         .manufacturer = "Espressif",
@@ -135,50 +132,49 @@ static void smart_outlet_thread_entry(void *p)
         .identify_routine = outlet_identify,
         .cid = HAP_CID_OUTLET,
     };
-    /* Create accessory object */
+    /* 创建配件对象 */
     accessory = hap_acc_create(&cfg);
 
-    /* Add a dummy Product Data */
+    /* 添加虚拟产品数据 */
     uint8_t product_data[] = {'E','S','P','3','2','H','A','P'};
     hap_acc_add_product_data(accessory, product_data, sizeof(product_data));
 
-    /* Add Wi-Fi Transport service required for HAP Spec R16 */
+    /* 添加 Wi-Fi 传输服务，这是 HAP Spec R16 所要求的 */
     hap_acc_add_wifi_transport_service(accessory, 0);
 
-    /* Create the Outlet Service. Include the "name" since this is a user visible service  */
+    /* 创建插座服务。包括"name"，因为这是用户可见的服务 */
     service = hap_serv_outlet_create(false, false);
     hap_serv_add_char(service, hap_char_name_create("My Smart Outlet"));
 
-    /* Get pointer to the outlet in use characteristic which we need to monitor for state changes */
+    /* 获取插座使用中特征的指针，我们需要监控其状态变化 */
     hap_char_t *outlet_in_use = hap_serv_get_char_by_uuid(service, HAP_CHAR_UUID_OUTLET_IN_USE);
 
-    /* Set the write callback for the service */
+    /* 为服务设置写入回调 */
     hap_serv_set_write_cb(service, outlet_write);
 
-    /* Add the Outlet Service to the Accessory Object */
+    /* 将插座服务添加到配件对象 */
     hap_acc_add_serv(accessory, service);
 
-    /* Add the Accessory to the HomeKit Database */
+    /* 将配件添加到 HomeKit 数据库 */
     hap_add_accessory(accessory);
 
-    /* Initialize the appliance specific hardware. This enables out-in-use detection */
+    /* 初始化特定设备的硬件。这启用了插座使用检测 */
     smart_outlet_hardware_init(OUTLET_IN_USE_GPIO);
 
-    /* For production accessories, the setup code shouldn't be programmed on to
-     * the device. Instead, the setup info, derived from the setup code must
-     * be used. Use the factory_nvs_gen utility to generate this data and then
-     * flash it into the factory NVS partition.
+    /* 对于生产配件，设置代码不应该被编程到设备中。
+     * 相反，应该使用从设置代码派生的设置信息。
+     * 使用 factory_nvs_gen 工具生成此数据，然后将其刷写到工厂 NVS 分区中。
      *
-     * By default, the setup ID and setup info will be read from the factory_nvs
-     * Flash partition and so, is not required to set here explicitly.
+     * 默认情况下，设置 ID 和设置信息将从工厂 NVS Flash 分区读取，
+     * 因此不需要在此处显式设置。
      *
-     * However, for testing purpose, this can be overridden by using hap_set_setup_code()
-     * and hap_set_setup_id() APIs, as has been done here.
+     * 然而，出于测试目的，可以使用 hap_set_setup_code() 和 hap_set_setup_id() API 覆盖它，
+     * 就像这里所做的那样。
      */
 #ifdef CONFIG_EXAMPLE_USE_HARDCODED_SETUP_CODE
-    /* Unique Setup code of the format xxx-xx-xxx. Default: 111-22-333 */
+    /* 格式为 xxx-xx-xxx 的唯一设置代码。默认：111-22-333 */
     hap_set_setup_code(CONFIG_EXAMPLE_SETUP_CODE);
-    /* Unique four character Setup Id. Default: ES32 */
+    /* 唯一的四字符设置 ID。默认：ES32 */
     hap_set_setup_id(CONFIG_EXAMPLE_SETUP_ID);
 #ifdef CONFIG_APP_WIFI_USE_WAC_PROVISIONING
     app_hap_setup_payload(CONFIG_EXAMPLE_SETUP_CODE, CONFIG_EXAMPLE_SETUP_ID, true, cfg.cid);
@@ -187,42 +183,41 @@ static void smart_outlet_thread_entry(void *p)
 #endif
 #endif
 
-    /* Enable Hardware MFi authentication (applicable only for MFi variant of SDK) */
+    /* 启用硬件 MFi 认证（仅适用于 SDK 的 MFi 变体） */
     hap_enable_mfi_auth(HAP_MFI_AUTH_HW);
 
-    /* Initialize Wi-Fi */
-    app_wifi_init();
+    /* 初始化 Wi-Fi */
+    // app_wifi_init();
 
-    /* After all the initializations are done, start the HAP core */
+    /* 完成所有初始化后，启动 HAP 核心 */
     hap_start();
-    /* Start Wi-Fi */
-    app_wifi_start(portMAX_DELAY);
+    /* 启动 Wi-Fi */
+    // app_wifi_start(portMAX_DELAY);
 
     uint32_t io_num = OUTLET_IN_USE_GPIO;
     hap_val_t appliance_value = {
         .b = true,
     };
-    /* Listen for Outlet-In-Use state change events. Other read/write functionality will be handled
-     * by the HAP Core.
-     * When the Outlet in Use GPIO goes low, it means Outlet is not in use.
-     * When the Outlet in Use GPIO goes high, it means Outlet is in use.
-     * Applications can define own logic as per their hardware.
+    /* 监听插座使用状态变化事件。其他读/写功能将由 HAP 核心处理。
+     * 当插座使用 GPIO 变低时，表示插座未使用。
+     * 当插座使用 GPIO 变高时，表示插座正在使用。
+     * 应用程序可以根据其硬件定义自己的逻辑。
      */
     while (1) {
         if (xQueueReceive(s_esp_evt_queue, &io_num, portMAX_DELAY) == pdFALSE) {
-            ESP_LOGI(TAG, "Outlet-In-Use trigger FAIL");
+            ESP_LOGI(TAG, "插座使用触发失败");
         } else {
             appliance_value.b = gpio_get_level(io_num);
-            /* If any state change is detected, update the Outlet In Use characteristic value */
+            /* 如果检测到任何状态变化，更新插座使用特征值 */
             hap_char_update_val(outlet_in_use, &appliance_value);
-            ESP_LOGI(TAG, "Outlet-In-Use triggered [%d]", appliance_value.b);
+            ESP_LOGI(TAG, "插座使用触发 [%d]", appliance_value.b);
         }
     }
 }
 
-// void app_main()
-// {
-//     /* Create the application thread */
-//     xTaskCreate(smart_outlet_thread_entry, SMART_OUTLET_TASK_NAME, SMART_OUTLET_TASK_STACKSIZE,
-//                 NULL, SMART_OUTLET_TASK_PRIORITY, NULL);
-// }
+void app_homeassistant_start()
+{
+    /* Create the application thread */
+    xTaskCreate(smart_outlet_thread_entry, SMART_OUTLET_TASK_NAME, SMART_OUTLET_TASK_STACKSIZE,
+                NULL, SMART_OUTLET_TASK_PRIORITY, NULL);
+}
