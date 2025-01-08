@@ -544,7 +544,6 @@ esp_err_t start_webserver(void)
     config.backlog_conn = 5;      // 设置等待连接队列大小
     config.recv_wait_timeout = 3;  // 减少接收超时
     config.send_wait_timeout = 3;  // 减少发送超时
-    config.keep_alive_enable = false;
     config.core_id = 0;           // 固定在核心0上运行
     config.stack_size = 8192;     // 增加堆栈大小
     
